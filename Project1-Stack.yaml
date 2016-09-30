@@ -23,7 +23,7 @@ parameters:
     type: string
     label: Availability Zone
     description: Region AZ to use
-    default: "uk-1b"
+    default: "uk-1a"
   win_admin_pass:
     hidden: true
     constraints:
