@@ -1,0 +1,1761 @@
+heat_template_version: 2013-05-23
+# Author: Graham Land
+# Date: 17/09/2016
+# Purpose: Iron.io PoC Template
+
+description: K5 template for Iron.io Proof of Concept
+
+# Input parameters
+parameters:
+  ubuntu1604:
+    type: string
+    label: Image name or ID
+    description: Ubuntu 16.04.LTS image to be used for compute instance
+    default: "Red Hat Enterprise Linux 7.2 64bit (English) 01"
+  az:
+    type: string
+    label: Availability Zone
+    description: Region AZ to use
+    default: "uk-1b"
+  default-sshkey:
+    type: string
+    label: ssh key injected into linux systems
+    description: ssh key for linux builds
+    default: "3t"
+   
+
+# K5 Infrastructure resources to be built
+resources:
+
+  # Create a new private network
+  ironio_net:
+    type: OS::Neutron::Net
+    properties:
+      availability_zone: { get_param: az }
+      name: "ironio_network"
+
+  # Create a new subnet on the private network
+  ironio_subnet:
+    type: OS::Neutron::Subnet
+    depends_on: ironio_net
+    properties:
+      availability_zone: { get_param: az }
+      name: "ironio_subnet"
+      network_id: { get_resource: ironio_net }
+      cidr: "10.10.203.0/24"
+      gateway_ip: "10.10.203.254"
+      allocation_pools:
+        - start: "10.10.203.200"
+          end: "10.10.203.220"
+      
+  # Create a new router
+  ironio_router:
+    type: OS::Neutron::Router
+    properties:
+      availability_zone: { get_param: az }
+      name: "ironio_router"
+
+  # Connect an interface on the private network's subnet to the router
+  ironio_router_interface:
+    type: OS::Neutron::RouterInterface
+    depends_on: ironio_router
+    properties:
+      router_id: { get_resource: ironio_router }
+      subnet_id: { get_resource: ironio_subnet }
+
+  # Create a security group
+  server_security_group1:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Add security group rules for server
+      name: "JumpBox"
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: udp
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: icmp
+
+
+
+
+  ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server1_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.1'
+
+  # Create a data volume for use with the server
+  data_vol_server1:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server1:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server1:
+    type: OS::Nova::Server
+    depends_on: [ server1_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server1}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp1"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server1 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server1_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol1:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server1, server1 ]
+    properties:
+      instance_uuid: {get_resource: server1}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server1}
+
+  ################################ Adding a Server End ################################
+
+ ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server2_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.2'
+
+  # Create a data volume for use with the server
+  data_vol_server2:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server2:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server2:
+    type: OS::Nova::Server
+    depends_on: [ server1,server2_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server2}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp2"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server2 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server2_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol2:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server2, server2 ]
+    properties:
+      instance_uuid: {get_resource: server2}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server2}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server3_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.3'
+
+  # Create a data volume for use with the server
+  data_vol_server3:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server3:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server3:
+    type: OS::Nova::Server
+    depends_on: [ server2,server3_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server3}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp3"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server3 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server3_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol3:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server3, server3 ]
+    properties:
+      instance_uuid: {get_resource: server3}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server3}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server4_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.4'
+
+  # Create a data volume for use with the server
+  data_vol_server4:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server4:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server4:
+    type: OS::Nova::Server
+    depends_on: [ server3,server4_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server4}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp4"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server4 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server4_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol4:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server4, server4 ]
+    properties:
+      instance_uuid: {get_resource: server4}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server4}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server5_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.5'
+
+  # Create a data volume for use with the server
+  data_vol_server5:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server5:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server5:
+    type: OS::Nova::Server
+    depends_on: [ server4,server5_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server5}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp5"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server5 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server5_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol5:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server5, server5 ]
+    properties:
+      instance_uuid: {get_resource: server5}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server5}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server6_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.6'
+
+  # Create a data volume for use with the server
+  data_vol_server6:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server6:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server6:
+    type: OS::Nova::Server
+    depends_on: [ server5,server6_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server6}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp6"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server6 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server6_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol6:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server6, server6 ]
+    properties:
+      instance_uuid: {get_resource: server6}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server6}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server7_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.7'
+
+  # Create a data volume for use with the server
+  data_vol_server7:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server7:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server7:
+    type: OS::Nova::Server
+    depends_on: [ server6,server7_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server7}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp7"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server7 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server7_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol7:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server7, server7 ]
+    properties:
+      instance_uuid: {get_resource: server7}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server7}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server8_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.8'
+
+  # Create a data volume for use with the server
+  data_vol_server8:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server8:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server8:
+    type: OS::Nova::Server
+    depends_on: [ server7,server8_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server8}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp8"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server8 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server8_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol8:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server8, server8 ]
+    properties:
+      instance_uuid: {get_resource: server8}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server8}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server9_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.9'
+
+  # Create a data volume for use with the server
+  data_vol_server9:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 400
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server9:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server9:
+    type: OS::Nova::Server
+    depends_on: [ server8,server9_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server9}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp9"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server9 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server9_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol9:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server9, server9 ]
+    properties:
+      instance_uuid: {get_resource: server9}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server9}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server10_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.10'
+
+  # Create a data volume for use with the server
+  data_vol_server10:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server10:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server10:
+    type: OS::Nova::Server
+    depends_on: [ server9,server10_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server10}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp10"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server10 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server10_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol10:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server10, server10 ]
+    properties:
+      instance_uuid: {get_resource: server10}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server10}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server11_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.203.11'
+
+  # Create a data volume for use with the server
+  data_vol_server11:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 140
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server11:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server11:
+    type: OS::Nova::Server
+    depends_on: [ server10,server11_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-1"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server11}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_cp11"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server11 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server11_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol11:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server11, server11 ]
+    properties:
+      instance_uuid: {get_resource: server11}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server11}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server12_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.1'
+
+  # Create a data volume for use with the server
+  data_vol_server12:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server12:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server12:
+    type: OS::Nova::Server
+    depends_on: [ server11,server12_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server12}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk1"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server12 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server12_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol12:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server12, server12 ]
+    properties:
+      instance_uuid: {get_resource: server12}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server12}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server13_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.2'
+
+  # Create a data volume for use with the server
+  data_vol_server13:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server13:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server13:
+    type: OS::Nova::Server
+    depends_on: [ server12,server13_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server13}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk2"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server13 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server13_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol13:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server13, server13 ]
+    properties:
+      instance_uuid: {get_resource: server13}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server13}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server14_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.3'
+
+  # Create a data volume for use with the server
+  data_vol_server14:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 100
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server14:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server14:
+    type: OS::Nova::Server
+    depends_on: [ server13,server14_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server14}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk3"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server14 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server14_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol14:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server14, server14 ]
+    properties:
+      instance_uuid: {get_resource: server14}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server14}
+
+  ################################ Adding a Server End ################################
+
+ ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server15_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.4'
+
+  # Create a data volume for use with the server
+  data_vol_server15:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server15:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server15:
+    type: OS::Nova::Server
+    depends_on: [ server14,server15_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server15}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk4"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server15 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server15_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol15:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server15, server15 ]
+    properties:
+      instance_uuid: {get_resource: server15}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server15}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server16_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.5'
+
+  # Create a data volume for use with the server
+  data_vol_server16:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server16:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server16:
+    type: OS::Nova::Server
+    depends_on: [ server15,server16_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server16}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk5"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server16 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server16_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol16:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server16, server16 ]
+    properties:
+      instance_uuid: {get_resource: server16}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server16}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server17_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.6'
+
+  # Create a data volume for use with the server
+  data_vol_server17:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server17:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server17:
+    type: OS::Nova::Server
+    depends_on: [ server16,server17_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server17}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk6"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server17 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server17_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol17:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server17, server17 ]
+    properties:
+      instance_uuid: {get_resource: server17}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server17}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server18_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.7'
+
+  # Create a data volume for use with the server
+  data_vol_server18:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server18:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server18:
+    type: OS::Nova::Server
+    depends_on: [ server17,server18_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server18}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk7"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server18 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server18_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol18:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server18, server18 ]
+    properties:
+      instance_uuid: {get_resource: server18}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server18}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server19_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.8'
+
+  # Create a data volume for use with the server
+  data_vol_server19:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server19:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server19:
+    type: OS::Nova::Server
+    depends_on: [ server18,server19_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server19}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk8"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server19 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server19_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol19:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server19, server19 ]
+    properties:
+      instance_uuid: {get_resource: server19}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server19}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server20_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.9'
+
+  # Create a data volume for use with the server
+  data_vol_server20:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server20:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server20:
+    type: OS::Nova::Server
+    depends_on: [ server19,server20_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server20}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk9"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server20 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server20_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol20:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server20, server20 ]
+    properties:
+      instance_uuid: {get_resource: server20}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server20}
+
+  ################################ Adding a Server End ################################
+
+    ################################ Adding a Server Start ##############################
+
+  # Create a new port for the server interface, assign an ip address and security group    
+  server21_port:
+    type: OS::Neutron::Port
+    depends_on: [ ironio_router,server_security_group1 ]
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_resource: ironio_net }
+      security_groups: [{ get_resource: server_security_group1 }]
+      fixed_ips:
+        - subnet_id: { get_resource: ironio_subnet }
+          ip_address: '10.10.202.10'
+
+  # Create a data volume for use with the server
+  data_vol_server21:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      description: Data volume
+      name: "data-vol"
+      size: 64
+      volume_type: "M1"
+
+  # Create a system volume for use with the server
+  sys-vol_server21:
+    type: OS::Cinder::Volume
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 40
+      volume_type: "M1"
+      image : { get_param: ubuntu1604 }
+
+  # Build a server using the system volume defined above
+  server21:
+    type: OS::Nova::Server
+    depends_on: [ server20,server21_port ]
+    properties:
+      key_name: { get_param: default-sshkey }
+      image: { get_param: ubuntu1604 }
+      flavor: "S-2"
+      block_device_mapping: [{"volume_size": "40", "volume_id": {get_resource: sys-vol_server21}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "ironio_wk10"
+      admin_user: "k5user"
+      user_data:
+        str_replace:
+          template: |
+            #cloud-config
+            write_files:
+              - content: |
+                  #!/bin/bash
+                  voldata_id=%voldata_id%
+                  voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
+                  mkfs.ext4 ${voldata_dev}
+                  mkdir -pv /mnt/appdata
+                  echo "${voldata_dev} /mnt/appdata ext4 defaults 1 2" >> /etc/fstab
+                  mount /mnt/appdata
+                  chmod 0777 /mnt/appdata; apt-get update; apt-get install -y docker.io
+                path: /tmp/format-disks
+                permissions: '0700'
+            runcmd:
+              - /tmp/format-disks
+          params:
+            "%voldata_id%": { get_resource: data_vol_server21 }
+      user_data_format: RAW
+      networks:
+        - port: { get_resource: server21_port }
+
+  # Attach previously defined data-vol to the server
+  attach_vol21:
+    type: OS::Cinder::VolumeAttachment
+    depends_on: [ data_vol_server21, server21 ]
+    properties:
+      instance_uuid: {get_resource: server21}
+      mountpoint: "/dev/vdb"
+      volume_id: {get_resource: data_vol_server21}
+
+  ################################ Adding a Server End ################################

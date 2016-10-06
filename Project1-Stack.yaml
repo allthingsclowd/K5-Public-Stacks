@@ -23,16 +23,9 @@ parameters:
     type: string
     label: Availability Zone
     description: Region AZ to use
-    default: "uk-1a"
+    default: "uk-1b"
   win_admin_pass:
     hidden: true
-    constraints:
-      - length: { min: 8, max: 16 }
-        description: Password length must be between 6 and 8 characters
-      - allowed_pattern: "[a-zA-Z0-9]+"
-        description: Password must consist of characters and numbers only
-      - allowed_pattern: "[A-Z]+[a-zA-Z0-9]*"
-        description: Password must start with an uppercase character
     default: C00lbananas
   default-sshkey:
     type: string
