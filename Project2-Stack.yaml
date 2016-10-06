@@ -25,6 +25,7 @@ parameters:
     description: Region AZ to use
     default: "uk-1b"
   win_admin_pass:
+    type: string
     hidden: true
     constraints:
       - length: { min: 8, max: 16 }
@@ -33,12 +34,14 @@ parameters:
         description: Password must consist of characters and numbers only
       - allowed_pattern: "[A-Z]+[a-zA-Z0-9]*"
         description: Password must start with an uppercase character
+    label: Admin Passowrd
+    description: Administrative password for the windows instances        
     default: C00lbananas
   default-sshkey:
     type: string
     label: ssh key injected into linux systems
     description: ssh key for linux builds
-    default: "3t"
+    default: "demostack"
 
 # K5 Infrastructure resources to be built
 resources:

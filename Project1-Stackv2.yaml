@@ -1,0 +1,36 @@
+heat_template_version: 2013-05-23
+
+# Author: Graham Land
+# Date: 25/09/2016
+# Purpose: Project 1 Demo HOT Infrastructure Template
+# Twitter: @allthingsclowd
+# Blog : https://allthingscloud.eu
+
+description: K5 template to build an environment within a Project
+
+# Input parameters
+parameters:
+
+  az:
+    type: string
+    label: Availability Zone
+    description: Region AZ to use
+    default: "uk-1b"
+      
+
+# K5 Infrastructure resources to be built
+resources:
+
+  # Create a new private network
+  management_net:
+    type: OS::Neutron::Net
+    properties:
+      availability_zone: { get_param: az }
+      name: "Management"
+
+      
+
+
+ 
+
+  

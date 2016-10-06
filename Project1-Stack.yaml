@@ -25,13 +25,23 @@ parameters:
     description: Region AZ to use
     default: "uk-1b"
   win_admin_pass:
+    type: string
     hidden: true
+    constraints:
+      - length: { min: 8, max: 16 }
+        description: Password length must be between 6 and 8 characters
+      - allowed_pattern: "[a-zA-Z0-9]+"
+        description: Password must consist of characters and numbers only
+      - allowed_pattern: "[A-Z]+[a-zA-Z0-9]*"
+        description: Password must start with an uppercase character
+    label: Admin Passowrd
+    description: Administrative password for the windows instances        
     default: C00lbananas
   default-sshkey:
     type: string
     label: ssh key injected into linux systems
     description: ssh key for linux builds
-    default: "3t"       
+    default: "demostack"       
 
 # K5 Infrastructure resources to be built
 resources:
@@ -85,7 +95,7 @@ resources:
     type: OS::Neutron::Router
     properties:
       availability_zone: { get_param: az }
-      name: "Project2_Router"
+      name: "Project1_Router"
 
   # Connect an interface on the private network's subnet to the router
   project1_router_interface1:
@@ -117,7 +127,7 @@ resources:
         - remote_ip_prefix: 0.0.0.0/0
           protocol: icmp
 
-   # Create a security group
+  # Create a security group
   server_security_group2:
     type: OS::Neutron::SecurityGroup
     properties:
