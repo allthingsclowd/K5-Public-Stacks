@@ -34,9 +34,9 @@ parameters:
         description: Password must consist of characters and numbers only
       - allowed_pattern: "[A-Z]+[a-zA-Z0-9]*"
         description: Password must start with an uppercase character
-    label: Admin Passowrd
+    label: Admin Password
     description: Administrative password for the windows instances        
-    default: C00lbananas
+    default: "Fujitsuk5user1234!"
   default-sshkey:
     type: string
     label: ssh key injected into linux systems
@@ -95,7 +95,7 @@ resources:
     type: OS::Neutron::Router
     properties:
       availability_zone: { get_param: az }
-      name: "Project1_Router"
+      name: "Project_1_Router"
 
   # Connect an interface on the private network's subnet to the router
   project1_router_interface1:
